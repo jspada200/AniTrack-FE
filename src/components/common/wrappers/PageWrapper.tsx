@@ -10,6 +10,9 @@ import styled from "styled-components";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useAuth } from "../../../contexts/AuthContext";
 import { useEffect } from "react";
+import { ProjectSelector } from "../ProjectSelector";
+import { NoProjectModal } from "../NoProjectModal";
+import { useProject } from "../../../contexts/ProjectContext";
 
 const StyledWrapper = styled(Flex)`
   min-height: 100vh;
@@ -74,6 +77,7 @@ interface PageWrapperProps {
 
 export const PageWrapper: React.FC<PageWrapperProps> = ({ children }) => {
   const { user, signOut, isAuthenticated, isLoading } = useAuth();
+  const { selectedProject } = useProject();
   const navigate = useNavigate();
 
   const handleLogout = async () => {
@@ -109,6 +113,7 @@ export const PageWrapper: React.FC<PageWrapperProps> = ({ children }) => {
         <Text size="5" weight="bold" mb="4">
           AniTrack
         </Text>
+        <ProjectSelector />
         <NavItem to="/dashboard">Dashboard</NavItem>
         <NavItem to="/projects">Projects</NavItem>
         <NavItem to="/tasks">Tasks</NavItem>
@@ -144,6 +149,8 @@ export const PageWrapper: React.FC<PageWrapperProps> = ({ children }) => {
           <Container size="3">{children}</Container>
         </MainContent>
       </Flex>
+
+      {!selectedProject && <NoProjectModal />}
     </StyledWrapper>
   );
 };
