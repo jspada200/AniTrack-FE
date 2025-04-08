@@ -1,170 +1,171 @@
--- Drop existing tables and functions
-DROP TABLE IF EXISTS posts CASCADE;
-DROP TABLE IF EXISTS profiles CASCADE;
+-- Enable necessary extensions
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+-- Drop existing tables and functions if they exist
+DROP TABLE IF EXISTS public.posts CASCADE;
+DROP TABLE IF EXISTS public.profiles CASCADE;
 DROP FUNCTION IF EXISTS public.handle_new_user() CASCADE;
 DROP FUNCTION IF EXISTS public.handle_profile_update() CASCADE;
 
--- Create the profiles table
-CREATE TABLE profiles (
-  id UUID REFERENCES auth.users ON DELETE CASCADE,
-  email TEXT,
-  user_metadata JSONB,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
-  PRIMARY KEY (id)
+-- Create profiles table
+CREATE TABLE public.profiles (
+    id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    email TEXT,
+    user_metadata JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()),
+    updated_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW())
 );
 
--- Enable Row Level Security on profiles
-ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
-
--- Create profiles policies
-CREATE POLICY "Allow authenticated users to view all profiles"
-  ON profiles FOR SELECT
-  USING (auth.role() = 'authenticated');
-
-CREATE POLICY "Allow users to insert their own profile"
-  ON profiles FOR INSERT
-  WITH CHECK (auth.uid() = id);
-
-CREATE POLICY "Allow users to update their own profile"
-  ON profiles FOR UPDATE
-  USING (auth.uid() = id);
-
--- Create the posts table
-CREATE TABLE posts (
-  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  project_id UUID NOT NULL,
-  content JSONB NOT NULL,
-  added_by UUID NOT NULL,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
-  FOREIGN KEY (added_by) REFERENCES profiles(id) ON DELETE CASCADE
+-- Create posts table
+CREATE TABLE public.posts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    content TEXT NOT NULL,
+    added_by UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    project_id UUID NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()),
+    updated_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW())
 );
 
--- Enable Row Level Security on posts
-ALTER TABLE posts ENABLE ROW LEVEL SECURITY;
-
--- Create posts policies
-CREATE POLICY "Allow authenticated users to view all posts"
-  ON posts FOR SELECT
-  USING (auth.role() = 'authenticated');
-
-CREATE POLICY "Allow users to insert their own posts"
-  ON posts FOR INSERT
-  WITH CHECK (auth.uid() = added_by);
-
-CREATE POLICY "Allow users to update their own posts"
-  ON posts FOR UPDATE
-  USING (auth.uid() = added_by);
-
-CREATE POLICY "Allow users to delete their own posts"
-  ON posts FOR DELETE
-  USING (auth.uid() = added_by);
-
--- Grant permissions to all roles
-GRANT ALL ON profiles TO postgres;
-GRANT ALL ON profiles TO authenticated;
-GRANT ALL ON profiles TO anon;
-GRANT ALL ON profiles TO service_role;
-
-GRANT ALL ON posts TO postgres;
-GRANT ALL ON posts TO authenticated;
-GRANT ALL ON posts TO anon;
-GRANT ALL ON posts TO service_role;
-
--- Grant usage on the schema
-GRANT USAGE ON SCHEMA public TO postgres;
-GRANT USAGE ON SCHEMA public TO authenticated;
-GRANT USAGE ON SCHEMA public TO anon;
-
--- Create function to handle new user creation
+-- Create function to handle new user creation with error handling
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
+DECLARE
+    user_meta JSONB;
 BEGIN
-  INSERT INTO public.profiles (id, email, user_metadata)
-  VALUES (
-    NEW.id,
-    NEW.email,
-    COALESCE(NEW.raw_user_meta_data, '{}'::jsonb)
-  );
-  RETURN NEW;
+    -- Build user metadata with fallbacks
+    user_meta := jsonb_build_object(
+        'name', COALESCE(
+            NEW.raw_user_meta_data->>'name',
+            NEW.raw_user_meta_data->>'full_name',
+            SPLIT_PART(NEW.email, '@', 1)
+        ),
+        'full_name', COALESCE(
+            NEW.raw_user_meta_data->>'full_name',
+            NEW.raw_user_meta_data->>'name',
+            SPLIT_PART(NEW.email, '@', 1)
+        ),
+        'avatar_url', COALESCE(
+            NEW.raw_user_meta_data->>'avatar_url',
+            NEW.raw_user_meta_data->>'picture',
+            'https://api.dicebear.com/7.x/initials/svg?seed=' || SPLIT_PART(NEW.email, '@', 1)
+        ),
+        'provider_id', COALESCE(
+            NEW.raw_app_meta_data->>'provider_id',
+            'email'
+        ),
+        'email_verified', COALESCE(
+            (NEW.raw_app_meta_data->>'email_verified')::boolean,
+            false
+        )
+    );
+
+    -- Insert into profiles
+    INSERT INTO public.profiles (id, email, user_metadata)
+    VALUES (NEW.id, NEW.email, user_meta);
+
+    RETURN NEW;
+EXCEPTION
+    WHEN OTHERS THEN
+        -- Log the error
+        RAISE LOG 'Error in handle_new_user: %', SQLERRM;
+        RAISE LOG 'User data: id=%, email=%, raw_user_meta_data=%, raw_app_meta_data=%',
+            NEW.id, NEW.email, NEW.raw_user_meta_data, NEW.raw_app_meta_data;
+        RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Create function to handle profile updates
+-- Create function to handle profile updates with error handling
 CREATE OR REPLACE FUNCTION public.handle_profile_update()
 RETURNS TRIGGER AS $$
+DECLARE
+    user_meta JSONB;
 BEGIN
-  UPDATE public.profiles
-  SET 
-    user_metadata = COALESCE(NEW.raw_user_meta_data, OLD.user_metadata),
-    updated_at = TIMEZONE('utc'::text, NOW())
-  WHERE id = NEW.id;
-  RETURN NEW;
+    -- Build user metadata with fallbacks
+    user_meta := jsonb_build_object(
+        'name', COALESCE(
+            NEW.raw_user_meta_data->>'name',
+            NEW.raw_user_meta_data->>'full_name',
+            OLD.user_metadata->>'name',
+            SPLIT_PART(NEW.email, '@', 1)
+        ),
+        'full_name', COALESCE(
+            NEW.raw_user_meta_data->>'full_name',
+            NEW.raw_user_meta_data->>'name',
+            OLD.user_metadata->>'full_name',
+            SPLIT_PART(NEW.email, '@', 1)
+        ),
+        'avatar_url', COALESCE(
+            NEW.raw_user_meta_data->>'avatar_url',
+            NEW.raw_user_meta_data->>'picture',
+            OLD.user_metadata->>'avatar_url',
+            'https://api.dicebear.com/7.x/initials/svg?seed=' || SPLIT_PART(NEW.email, '@', 1)
+        ),
+        'provider_id', COALESCE(
+            NEW.raw_app_meta_data->>'provider_id',
+            OLD.user_metadata->>'provider_id',
+            'email'
+        ),
+        'email_verified', COALESCE(
+            (NEW.raw_app_meta_data->>'email_verified')::boolean,
+            (OLD.user_metadata->>'email_verified')::boolean,
+            false
+        )
+    );
+
+    -- Update profiles
+    UPDATE public.profiles
+    SET 
+        user_metadata = user_meta,
+        updated_at = TIMEZONE('utc'::text, NOW())
+    WHERE id = NEW.id;
+
+    RETURN NEW;
+EXCEPTION
+    WHEN OTHERS THEN
+        -- Log the error
+        RAISE LOG 'Error in handle_profile_update: %', SQLERRM;
+        RAISE LOG 'User data: id=%, email=%, raw_user_meta_data=%, raw_app_meta_data=%',
+            NEW.id, NEW.email, NEW.raw_user_meta_data, NEW.raw_app_meta_data;
+        RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- Create triggers
 CREATE TRIGGER on_auth_user_created
-  AFTER INSERT ON auth.users
-  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+    AFTER INSERT ON auth.users
+    FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 
 CREATE TRIGGER on_auth_user_updated
-  AFTER UPDATE ON auth.users
-  FOR EACH ROW EXECUTE FUNCTION public.handle_profile_update();
+    AFTER UPDATE ON auth.users
+    FOR EACH ROW EXECUTE FUNCTION public.handle_profile_update();
 
--- Insert sample profiles for existing users
-INSERT INTO profiles (id, email, user_metadata)
-VALUES 
-  ('00000000-0000-0000-0000-000000000001', 'animator@example.com', 
+-- Grant permissions
+GRANT ALL ON public.profiles TO authenticated;
+GRANT ALL ON public.profiles TO anon;
+GRANT ALL ON public.profiles TO service_role;
+GRANT ALL ON public.profiles TO postgres;
+
+GRANT ALL ON public.posts TO authenticated;
+GRANT ALL ON public.posts TO anon;
+GRANT ALL ON public.posts TO service_role;
+GRANT ALL ON public.posts TO postgres;
+
+-- Ensure all existing auth.users have profiles
+INSERT INTO public.profiles (id, email, user_metadata)
+SELECT 
+    id,
+    email,
     jsonb_build_object(
-      'name', 'John Animator',
-      'full_name', 'John Animator',
-      'avatar_url', 'https://api.dicebear.com/7.x/avataaars/svg?seed=animator'
+        'name', COALESCE(raw_user_meta_data->>'name', raw_user_meta_data->>'full_name', SPLIT_PART(email, '@', 1)),
+        'full_name', COALESCE(raw_user_meta_data->>'full_name', raw_user_meta_data->>'name', SPLIT_PART(email, '@', 1)),
+        'avatar_url', COALESCE(raw_user_meta_data->>'avatar_url', raw_user_meta_data->>'picture', 'https://api.dicebear.com/7.x/initials/svg?seed=' || SPLIT_PART(email, '@', 1)),
+        'provider_id', COALESCE(raw_app_meta_data->>'provider_id', 'email'),
+        'email_verified', COALESCE((raw_app_meta_data->>'email_verified')::boolean, false)
     )
-  ),
-  ('00000000-0000-0000-0000-000000000002', 'modeler@example.com',
-    jsonb_build_object(
-      'name', 'Sarah Modeler',
-      'full_name', 'Sarah Modeler',
-      'avatar_url', 'https://api.dicebear.com/7.x/avataaars/svg?seed=modeler'
-    )
-  ),
-  ('00000000-0000-0000-0000-000000000003', 'texture@example.com',
-    jsonb_build_object(
-      'name', 'Mike Texture',
-      'full_name', 'Mike Texture',
-      'avatar_url', 'https://api.dicebear.com/7.x/avataaars/svg?seed=texture'
-    )
-  ),
-  ('00000000-0000-0000-0000-000000000004', 'reviewer@example.com',
-    jsonb_build_object(
-      'name', 'Lisa Reviewer',
-      'full_name', 'Lisa Reviewer',
-      'avatar_url', 'https://api.dicebear.com/7.x/avataaars/svg?seed=reviewer'
-    )
-  ),
-  ('a06cbc2e-d9c1-482d-bb44-fd0359611174', 'tex1820@gmail.com',
-    jsonb_build_object(
-      'name', 'James Spadafora',
-      'full_name', 'James Spadafora',
-      'avatar_url', 'https://lh3.googleusercontent.com/a/ACg8ocIRz8xOR4QbnjFxSTj8_9KnQRepza0H4MtNAnce1PVltQs96msZ=s96-c',
-      'provider_id', '107593813496141062446',
-      'email_verified', true
-    )
-  ),
-  ('c1ac2a27-e6c2-42f2-97f5-d5d0fd5f677f', 'spadimationvfx@gmail.com',
-    jsonb_build_object(
-      'name', 'James Spadafora',
-      'full_name', 'James Spadafora',
-      'avatar_url', 'https://lh3.googleusercontent.com/a/ACg8ocKc7Gaqf3AkhtGuP2-t4eFn6jKKvaTX41-mpqoNEuBZns-TAg=s96-c',
-      'provider_id', '116852607762566465343',
-      'email_verified', true
-    )
-  )
-ON CONFLICT (id) DO UPDATE SET
-  user_metadata = EXCLUDED.user_metadata,
-  updated_at = TIMEZONE('utc'::text, NOW());
+FROM auth.users
+WHERE id NOT IN (SELECT id FROM public.profiles)
+ON CONFLICT (id) DO NOTHING;
 
 -- Create the projects table
 CREATE TABLE projects (
