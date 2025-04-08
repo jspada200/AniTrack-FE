@@ -42,11 +42,35 @@ function AuthCallback() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    supabase.auth.onAuthStateChange((event) => {
-      if (event === "SIGNED_IN") {
-        navigate({ to: "/feed" });
+    const handleCallback = async () => {
+      try {
+        const {
+          data: { session },
+          error,
+        } = await supabase.auth.getSession();
+
+        if (error) {
+          console.error("Error getting session:", error);
+          navigate({ to: "/login" });
+          return;
+        }
+
+        if (session) {
+          const redirectPath = localStorage.getItem("redirectAfterLogin");
+          if (redirectPath) {
+            localStorage.removeItem("redirectAfterLogin");
+            navigate({ to: redirectPath });
+          } else {
+            navigate({ to: "/feed" });
+          }
+        }
+      } catch (error) {
+        console.error("Error in auth callback:", error);
+        navigate({ to: "/login" });
       }
-    });
+    };
+
+    handleCallback();
   }, [navigate]);
 
   return <div>Loading...</div>;

@@ -75,6 +75,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const signInWithGoogle = async () => {
+    // Store the current URL before redirecting
+    const currentPath = window.location.pathname;
+    if (currentPath !== "/login" && currentPath !== "/signup") {
+      localStorage.setItem("redirectAfterLogin", currentPath);
+    }
+
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
