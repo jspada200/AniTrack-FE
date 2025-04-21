@@ -1,6 +1,13 @@
 import { Avatar, Box, Text, Card, Flex, Button } from "@radix-ui/themes";
+import {
+  HeartIcon,
+  HeartFilledIcon,
+  ChatBubbleIcon,
+  Share1Icon,
+} from "@radix-ui/react-icons";
 import styled from "styled-components";
 import { formatDistanceToNow } from "date-fns";
+import { useLikePost } from "../../api/socialFeed";
 
 const PostCard = styled(Card)`
   padding: 1rem;
@@ -22,6 +29,18 @@ const PostActions = styled(Flex)`
   border-bottom: 1px solid var(--gray-6);
   padding: 0.5rem 0;
   margin-bottom: 1rem;
+  gap: 1rem;
+`;
+
+const ActionButton = styled(Button)<{ $isActive?: boolean }>`
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: ${(props) => (props.$isActive ? "var(--red-11)" : "var(--gray-11)")};
+
+  &:hover {
+    color: ${(props) => (props.$isActive ? "var(--red-12)" : "var(--gray-12)")};
+  }
 `;
 
 const CommentSection = styled(Box)`
@@ -29,7 +48,6 @@ const CommentSection = styled(Box)`
 `;
 
 const Comment = styled(Flex)`
-  margin-bottom: 0.5rem;
   padding: 0.5rem;
   background: var(--gray-3);
   border-radius: 4px;
@@ -63,6 +81,10 @@ interface Post {
   created_at: string;
   user: User;
   comments?: Comment[];
+  likes?: {
+    count: number;
+    isLiked: boolean;
+  };
 }
 
 interface PostProps {
@@ -74,6 +96,12 @@ export const Post = ({ post }: PostProps) => {
   const userName =
     user?.user_metadata?.full_name || user?.email?.split("@")[0] || "Anonymous";
   const userAvatar = user?.user_metadata?.avatar_url;
+  const likeMutation = useLikePost();
+
+  const handleLike = () => {
+    if (!post.likes) return;
+    likeMutation.mutate({ postId: post.id, isLiked: post.likes.isLiked });
+  };
 
   return (
     <PostCard>
@@ -84,7 +112,7 @@ export const Post = ({ post }: PostProps) => {
           fallback={userName?.[0]?.toUpperCase() || "A"}
           radius="full"
         />
-        <Box>
+        <Flex direction="column">
           <Text size="2" weight="bold">
             {userName}
           </Text>
@@ -93,23 +121,38 @@ export const Post = ({ post }: PostProps) => {
               addSuffix: true,
             })}
           </Text>
-        </Box>
+        </Flex>
       </PostHeader>
 
       <PostContent>
         <Text size="2">{post.content.message}</Text>
       </PostContent>
 
-      <PostActions gap="3" justify="center">
-        <Button variant="ghost" size="1">
-          Like
-        </Button>
-        <Button variant="ghost" size="1">
-          Comment
-        </Button>
-        <Button variant="ghost" size="1">
-          Share
-        </Button>
+      <PostActions gap="3" justify="start">
+        <ActionButton
+          variant="ghost"
+          size="1"
+          $isActive={post.likes?.isLiked}
+          onClick={handleLike}
+          disabled={likeMutation.isPending}
+        >
+          {post.likes?.isLiked ? (
+            <HeartFilledIcon width="16" height="16" />
+          ) : (
+            <HeartIcon width="16" height="16" />
+          )}
+          <Text size="1">
+            {post.likes?.count || 0} Like{post.likes?.count !== 1 ? "s" : ""}
+          </Text>
+        </ActionButton>
+        <ActionButton variant="ghost" size="1">
+          <ChatBubbleIcon width="16" height="16" />
+          <Text size="1">Comment</Text>
+        </ActionButton>
+        <ActionButton variant="ghost" size="1">
+          <Share1Icon width="16" height="16" />
+          <Text size="1">Share</Text>
+        </ActionButton>
       </PostActions>
 
       {post.comments && post.comments.length > 0 && (
@@ -132,11 +175,6 @@ export const Post = ({ post }: PostProps) => {
                     {commentUserName}
                   </Text>
                   <Text size="1">{comment.content.message}</Text>
-                  <Text size="1" color="gray">
-                    {formatDistanceToNow(new Date(comment.created_at), {
-                      addSuffix: true,
-                    })}
-                  </Text>
                 </Box>
               </Comment>
             );
