@@ -1,6 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useProjects } from "./useProjectData";
 import { supabase } from "../lib/supabase";
+import { useProject } from "../contexts/ProjectContext";
+import { Post, PostContent, PostType } from "../types/socialFeed";
+import { queryKeys } from "./queryKeys";
 
 interface User {
   id: string;
@@ -34,13 +37,12 @@ export const usePosts = () => {
   const { selectedProject } = useProjects();
 
   const postsQuery = useQuery({
-    queryKey: ["posts", selectedProject?.id],
+    queryKey: queryKeys.posts.byProject(selectedProject?.id || ""),
     queryFn: async () => {
       if (!selectedProject?.id) {
         return [];
       }
 
-      // Get posts with user data and likes in a single query using joins
       const { data: posts, error: postsError } = await supabase
         .from("posts")
         .select(
@@ -63,17 +65,16 @@ export const usePosts = () => {
         throw postsError;
       }
 
-      // Get current user's ID
       const {
         data: { user },
       } = await supabase.auth.getUser();
       const currentUserId = user?.id;
 
-      // Transform the data to match the Post interface
       const transformedPosts = (posts || []).map((post) => {
         const likes = post.post_likes || [];
         return {
           ...post,
+          content: post.content as PostContent,
           user: post.profiles
             ? {
                 id: post.profiles.id,
@@ -100,8 +101,116 @@ export const usePosts = () => {
   };
 };
 
+export const useCreatePost = () => {
+  const queryClient = useQueryClient();
+  const { selectedProject } = useProject();
+
+  return useMutation({
+    mutationFn: async ({
+      content,
+      type,
+    }: {
+      content: string;
+      type: PostType;
+    }) => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) throw new Error("User not authenticated");
+      if (!selectedProject) throw new Error("No project selected");
+
+      const postContent: PostContent = {
+        type,
+        message: content,
+      };
+
+      const { data: post, error } = await supabase
+        .from("posts")
+        .insert({
+          content: postContent,
+          added_by: user.id,
+          project_id: selectedProject.id,
+        })
+        .select(
+          `
+          *,
+          profiles (
+            id,
+            email,
+            user_metadata
+          ),
+          post_likes (
+            user_id
+          )
+        `
+        )
+        .single();
+
+      if (error) throw error;
+      return post;
+    },
+    onMutate: async (newPost) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({
+        queryKey: queryKeys.posts.byProject(selectedProject?.id || ""),
+      });
+
+      // Snapshot the previous value
+      const previousPosts =
+        queryClient.getQueryData<Post[]>(
+          queryKeys.posts.byProject(selectedProject?.id || "")
+        ) || [];
+
+      // Optimistically update to the new value
+      const optimisticPost: Post = {
+        id: "temp-id",
+        content: {
+          type: newPost.type,
+          message: newPost.content,
+        },
+        created_at: new Date().toISOString(),
+        added_by: (await supabase.auth.getUser()).data.user?.id || "",
+        project_id: selectedProject?.id || "",
+        user: {
+          id: (await supabase.auth.getUser()).data.user?.id || "",
+          email: (await supabase.auth.getUser()).data.user?.email || "",
+          user_metadata: (await supabase.auth.getUser()).data.user
+            ?.user_metadata,
+        },
+        likes: {
+          count: 0,
+          isLiked: false,
+        },
+      };
+
+      queryClient.setQueryData<Post[]>(
+        queryKeys.posts.byProject(selectedProject?.id || ""),
+        [optimisticPost, ...previousPosts]
+      );
+
+      return { previousPosts };
+    },
+    onError: (err, newPost, context) => {
+      // If the mutation fails, use the context returned from onMutate to roll back
+      if (context?.previousPosts) {
+        queryClient.setQueryData(
+          queryKeys.posts.byProject(selectedProject?.id || ""),
+          context.previousPosts
+        );
+      }
+    },
+    onSuccess: (newPost) => {
+      // Invalidate and refetch
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.posts.byProject(selectedProject?.id || ""),
+      });
+    },
+  });
+};
+
 export const useLikePost = () => {
   const queryClient = useQueryClient();
+  const { selectedProject } = useProject();
 
   return useMutation({
     mutationFn: async ({
@@ -136,39 +245,52 @@ export const useLikePost = () => {
     },
     onMutate: async ({ postId, isLiked }) => {
       // Cancel any outgoing refetches
-      await queryClient.cancelQueries({ queryKey: ["posts"] });
+      await queryClient.cancelQueries({
+        queryKey: queryKeys.posts.byProject(selectedProject?.id || ""),
+      });
 
       // Snapshot the previous value
-      const previousPosts = queryClient.getQueryData(["posts"]) as Post[];
+      const previousPosts =
+        queryClient.getQueryData<Post[]>(
+          queryKeys.posts.byProject(selectedProject?.id || "")
+        ) || [];
 
       // Optimistically update to the new value
-      queryClient.setQueryData(["posts"], (old: Post[] | undefined) => {
-        if (!old) return old;
-        return old.map((post) => {
-          if (post.id === postId) {
-            return {
-              ...post,
-              likes: {
-                count: (post.likes?.count || 0) + (isLiked ? -1 : 1),
-                isLiked: !isLiked,
-              },
-            };
-          }
-          return post;
-        });
-      });
+      queryClient.setQueryData<Post[]>(
+        queryKeys.posts.byProject(selectedProject?.id || ""),
+        (old) => {
+          if (!old) return old;
+          return old.map((post) => {
+            if (post.id === postId) {
+              return {
+                ...post,
+                likes: {
+                  count: (post.likes?.count || 0) + (isLiked ? -1 : 1),
+                  isLiked: !isLiked,
+                },
+              };
+            }
+            return post;
+          });
+        }
+      );
 
       return { previousPosts };
     },
     onError: (err, variables, context) => {
       // If the mutation fails, use the context returned from onMutate to roll back
       if (context?.previousPosts) {
-        queryClient.setQueryData(["posts"], context.previousPosts);
+        queryClient.setQueryData(
+          queryKeys.posts.byProject(selectedProject?.id || ""),
+          context.previousPosts
+        );
       }
     },
     onSettled: () => {
       // Always refetch after error or success to ensure data is in sync
-      queryClient.invalidateQueries({ queryKey: ["posts"] });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.posts.byProject(selectedProject?.id || ""),
+      });
     },
   });
 };

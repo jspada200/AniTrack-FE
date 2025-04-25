@@ -1,0 +1,8 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+Always use Tanstack query and mutations when working with external APIs
+

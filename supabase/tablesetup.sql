@@ -516,6 +516,39 @@ create policy "Project owners can manage posts"
         )
     );
 
+-- Post likes policies
+create policy "Users can view likes from posts they can view"
+    on post_likes for select
+    using (
+        exists (
+            select 1 from posts
+            join project_crew on project_crew.project_id = posts.project_id
+            where posts.id = post_likes.post_id
+            and project_crew.user_id = auth.uid()
+        )
+    );
+
+create policy "Users can like posts they can view"
+    on post_likes for insert
+    with check (
+        exists (
+            select 1 from posts
+            join project_crew on project_crew.project_id = posts.project_id
+            where posts.id = post_likes.post_id
+            and project_crew.user_id = auth.uid()
+        )
+        and user_id = auth.uid()
+    );
+
+create policy "Users can unlike their own likes"
+    on post_likes for delete
+    using (user_id = auth.uid());
+
+-- Grant super users full access to post_likes
+create policy "Super users can manage all likes"
+    on post_likes for all
+    using (is_super_user());
+
 -- Create functions for automatic timestamps
 create or replace function update_updated_at_column()
 returns trigger as $$

@@ -1,0 +1,34 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Anitrack 
+
+Ani track is a SaaS product to allow small to medium sized visual effects and animation studios
+to manage productions. Compable products would be Ftrack or Shotgrid. The big difference between this product and these other applications is that this one is targeted at smaller productions. This allows for a lower price point. 
+
+The product will contain the following features
+
+- Social Feed: A facebook style feed that will allow users to share updates about what they are working on including videos, comments, and images.
+
+- Project Tracking Entities: A series of entities representing shots, assets, sequences, notes, etc. These will be editable in a table and in the future in a scheduler Gantt chart. 
+
+- Review Workflow: This workflow will allow artists to submit work for review to supervisors on the project to allow for iteration. 
+
+
+## Tech Stack
+
+### Backend
+
+For the back end, primarily Supabase will be used to contain all the data about the project, as well as to maintain row level security. In addition, this will be used for media uploads and user authentication 
+
+### Frontend
+
+The front end stack will be a Vite application created in React. For managing caching and for requests, Tanstack Query will be used. For styling, styled-components will be used. for tables, tan stack table will be used. for styling, Radix's themes will be used. 
+
+#### Contexts
+
+- Current project - The currently selected project
+- User - The logged in user
+
