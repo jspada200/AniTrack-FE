@@ -6,6 +6,7 @@ import {
   Container,
   DropdownMenu,
 } from "@radix-ui/themes";
+import "@radix-ui/themes/styles.css";
 import styled from "styled-components";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useAuth } from "../../../contexts/AuthContext";

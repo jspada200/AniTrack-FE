@@ -88,6 +88,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         queryParams: {
           access_type: "offline",
           prompt: "consent",
+          scope:
+            "email profile https://www.googleapis.com/auth/userinfo.profile",
         },
       },
     });
